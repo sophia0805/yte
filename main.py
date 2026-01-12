@@ -2,7 +2,9 @@ import discord
 from discord.ext import commands
 import os
 import asyncio
+import threading
 from dotenv import load_dotenv
+from flask import Flask
 import vonage
 from vonage_sms import SmsMessage
 
@@ -191,9 +193,29 @@ async def snipe(ctx):
       embed.set_footer(text= f"Snipe requested by {ctx.author.name}")
       await ctx.send(embed=embed)
 
+# Flask app for keeping the bot alive on Render
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "Bot is running!"
+
+@app.route('/health')
+def health():
+    return {"status": "ok", "bot": "online"}, 200
+
+def run_flask():
+    port = int(os.getenv('PORT', 5000))
+    app.run(host='0.0.0.0', port=port, debug=False)
+
 async def main():
     async with client:
         await client.start(token)
 
 if __name__ == "__main__":
+    # Run Flask in a separate thread
+    flask_thread = threading.Thread(target=run_flask, daemon=True)
+    flask_thread.start()
+    
+    # Run Discord bot
     asyncio.run(main())
