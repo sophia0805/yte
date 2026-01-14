@@ -95,7 +95,7 @@ async def on_message(message):
     timestamp = message.created_at.strftime("%Y-%m-%d %H:%M:%S UTC")
     subject = f"[Discord] #{message.channel.name} - {message.author.name}"
     email_message = (
-      f"{message.content}"
+      f"{message.content}\n"
       "-------------------\n"
       f"Channel: #{message.channel.name} (ID: {message.channel.id})\n"
       f"Author : {message.author} (ID: {message.author.id})\n"
