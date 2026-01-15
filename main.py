@@ -27,14 +27,15 @@ else:
     print("Warning: Maileroo API credentials not found. Email functionality will be disabled.")
 
 # Discord channel configuration for receiving emails via Maileroo webhook
-discord_channel_id = os.getenv("DISCORD_CHANNEL_ID")  # Channel ID to send emails to
+discord_channel_id = os.getenv("DISCORD_CHANNEL_ID")  # Fallback channel ID if subject parsing fails
+discord_guild_id = os.getenv("DISCORD_GUILD_ID", "1405628370301091860")  # Guild ID to search channels in
 
-if discord_channel_id:
+if discord_guild_id:
     email_to_discord_configured = True
-    print("Email-to-Discord forwarding configured (via Maileroo webhook)")
+    print("Email-to-Discord forwarding configured (via Maileroo webhook, routing by subject)")
 else:
     email_to_discord_configured = False
-    print("Warning: Discord channel ID not found. Email-to-Discord forwarding will be disabled.")
+    print("Warning: Discord guild ID not found. Email-to-Discord forwarding will be disabled.")
 intents = discord.Intents.default()
 intents.members = True
 intents.message_content = True
@@ -107,16 +108,50 @@ async def send_email(subject, message_content):
         traceback.print_exc()
         return False
 
+def find_channel_from_subject(subject):
+    """Parse email subject to find the Discord channel name and return the channel"""
+    # Remove "Re:" or "RE:" prefix if present
+    subject_clean = re.sub(r'^(Re|RE):\s*', '', subject, flags=re.IGNORECASE).strip()
+    
+    # Look for pattern: [Discord] #channel-name - author-name
+    # Match: [Discord] #channel-name
+    match = re.search(r'\[Discord\]\s*#([^\s-]+)', subject_clean, re.IGNORECASE)
+    if match:
+        channel_name = match.group(1)
+        # Find the channel in the guild
+        guild = client.get_guild(int(discord_guild_id))
+        if guild:
+            # Try to find channel by name (case-insensitive)
+            channel = discord.utils.get(guild.text_channels, name=channel_name)
+            if channel:
+                print(f"Found channel '{channel_name}' from subject: {subject}")
+                return channel
+            else:
+                print(f"Channel '{channel_name}' not found in guild. Subject: {subject}")
+        else:
+            print(f"Guild {discord_guild_id} not found")
+    
+    # Fallback: try to find channel by ID if configured
+    if discord_channel_id:
+        channel = client.get_channel(int(discord_channel_id))
+        if channel:
+            print(f"Using fallback channel {discord_channel_id} (could not parse channel from subject)")
+            return channel
+    
+    return None
+
 async def send_email_to_discord(from_email, subject, body, date=None, attachments=None, 
                                  envelope_sender=None, recipients=None, domain=None, is_spam=False):
-    """Send email content to Discord channel"""
+    """Send email content to Discord channel based on subject line"""
     if not email_to_discord_configured:
         return
     
     try:
-        channel = client.get_channel(int(discord_channel_id))
+        # Find channel from subject line
+        channel = find_channel_from_subject(subject)
+        
         if channel is None:
-            print(f"Error: Could not find Discord channel with ID {discord_channel_id}")
+            print(f"Error: Could not find Discord channel from subject '{subject}' and no fallback channel configured")
             return
         
         # Determine embed color based on spam status
@@ -168,7 +203,7 @@ async def send_email_to_discord(from_email, subject, body, date=None, attachment
         else:
             await channel.send(embed=embed)
         
-        print(f"Email from {from_email} forwarded to Discord channel {discord_channel_id}")
+        print(f"Email from {from_email} forwarded to Discord channel {channel.name} ({channel.id})")
     except Exception as e:
         print(f"Error sending email to Discord: {e}")
         import traceback
@@ -310,17 +345,21 @@ async def snipe(ctx):
 async def checkmail(ctx):
     """Check email forwarding status and show setup instructions"""
     if not email_to_discord_configured:
-        await ctx.send("❌ Email-to-Discord forwarding is not configured. Set DISCORD_CHANNEL_ID in your .env file.")
+        await ctx.send("❌ Email-to-Discord forwarding is not configured. Set DISCORD_GUILD_ID in your .env file.")
         return
     
-    channel = client.get_channel(int(discord_channel_id))
-    if not channel:
-        await ctx.send(f"⚠️ Email-to-Discord is configured but channel {discord_channel_id} not found.")
+    guild = client.get_guild(int(discord_guild_id))
+    if not guild:
+        await ctx.send(f"⚠️ Email-to-Discord is configured but guild {discord_guild_id} not found.")
         return
     
     # Get webhook URL (try to get from env or construct it)
     webhook_base_url = os.getenv("WEBHOOK_BASE_URL", "https://your-domain.com")
-    webhook_url = f"{webhook_base_url}/email-webhook"
+    # If URL already includes /email-webhook, use it as-is, otherwise append it
+    if webhook_base_url.endswith("/email-webhook"):
+        webhook_url = webhook_base_url
+    else:
+        webhook_url = f"{webhook_base_url.rstrip('/')}/email-webhook"
     
     embed = discord.Embed(
         title="📧 Email-to-Discord Status",
@@ -328,7 +367,7 @@ async def checkmail(ctx):
     )
     embed.add_field(
         name="✅ Status",
-        value=f"Active! Emails will be sent to {channel.mention}",
+        value=f"Active! Emails will be routed to channels based on subject line.\nGuild: {guild.name}",
         inline=False
     )
     embed.add_field(
@@ -351,6 +390,15 @@ async def checkmail(ctx):
         ),
         inline=False
     )
+    embed.add_field(
+        name="📝 How It Works",
+        value=(
+            "Emails are routed to Discord channels based on the subject line.\n"
+            "The bot looks for: `[Discord] #channel-name` in the subject.\n"
+            "If the channel can't be found, it falls back to the configured channel."
+        ),
+        inline=False
+    )
     
     await ctx.send(embed=embed)
 
@@ -358,8 +406,12 @@ async def checkmail(ctx):
 @commands.check(isSophia)
 async def webhookurl(ctx):
     """Get the webhook URL for Maileroo Inbound Routing configuration"""
-    webhook_base_url = os.getenv("WEBHOOK_BASE_URL")
-    webhook_url = f"{webhook_base_url}/email-webhook"
+    webhook_base_url = os.getenv("WEBHOOK_BASE_URL", "https://your-domain.com")
+    # If URL already includes /email-webhook, use it as-is, otherwise append it
+    if webhook_base_url.endswith("/email-webhook"):
+        webhook_url = webhook_base_url
+    else:
+        webhook_url = f"{webhook_base_url.rstrip('/')}/email-webhook"
     
     embed = discord.Embed(
         title="🔗 Webhook URL for Maileroo",
