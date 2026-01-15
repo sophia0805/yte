@@ -45,11 +45,15 @@ async def isSophia(ctx):
   return ctx.author.id == 704038199776903209 or ctx.author.id == 701792352301350973
  
 client.snipes = {}
+bot_event_loop = None  # Global variable to store the bot's event loop
 
 @client.event
 async def on_ready():
   await client.change_presence(activity=discord.watching(name=" the AI & Data Science Club!"))
   print('Ready!')
+  # Store the event loop for use in Flask routes
+  global bot_event_loop
+  bot_event_loop = asyncio.get_event_loop()
 
 async def send_email(subject, message_content):
     """Send email notification using Maileroo API"""
@@ -419,11 +423,15 @@ def email_webhook():
                             print(f"Validation failed: HTTP {resp.status}")
                     return False
                 
-                # Run validation in bot's event loop
-                validation_result = asyncio.run_coroutine_threadsafe(
-                    validate_webhook(),
-                    client.loop
-                ).result(timeout=10)
+                # Use a temporary event loop for validation (independent of Discord bot)
+                try:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    validation_result = loop.run_until_complete(validate_webhook())
+                    loop.close()
+                except Exception as e:
+                    print(f"Error in validation loop: {e}")
+                    validation_result = False
                 
                 if not validation_result:
                     print("Warning: Webhook validation failed - processing anyway")
@@ -481,20 +489,26 @@ def email_webhook():
             if is_spam or spam_status_header == 'Yes':
                 spam_note = " ⚠️ **SPAM**"
             
-            asyncio.run_coroutine_threadsafe(
-                send_email_to_discord(
-                    from_email=from_header,
-                    subject=subject_header + spam_note,
-                    body=body,
-                    date=date,
-                    attachments=attachments,
-                    envelope_sender=envelope_sender,
-                    recipients=recipients,
-                    domain=domain,
-                    is_spam=is_spam
-                ),
-                client.loop
-            )
+            # Use the stored bot event loop
+            global bot_event_loop
+            if bot_event_loop:
+                asyncio.run_coroutine_threadsafe(
+                    send_email_to_discord(
+                        from_email=from_header,
+                        subject=subject_header + spam_note,
+                        body=body,
+                        date=date,
+                        attachments=attachments,
+                        envelope_sender=envelope_sender,
+                        recipients=recipients,
+                        domain=domain,
+                        is_spam=is_spam
+                    ),
+                    bot_event_loop
+                )
+            else:
+                print("Error: Bot event loop not available. Bot may not be fully started yet.")
+                return {"status": "error", "message": "Bot not ready"}, 503
             
             # Optionally delete the email after processing (uncomment if desired)
             # deletion_url = data.get('deletion_url')
@@ -525,9 +539,11 @@ def run_bot():
     import time
     time.sleep(2)
     
+    global bot_event_loop
     try:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
+        bot_event_loop = loop  # Store the loop globally
         
         async def bot_main():
             async with client:
@@ -540,7 +556,8 @@ def run_bot():
         traceback.print_exc()
     finally:
         try:
-            loop.close()
+            if loop:
+                loop.close()
         except:
             pass
 
