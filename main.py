@@ -40,7 +40,6 @@ else:
     print("Warning: Discord guild ID not found. Email-to-Discord forwarding will be disabled.")
 
 intents = discord.Intents.default()
-intents.members = True
 intents.message_content = True  # Required to read message content and process commands
 
 # Configure Discord client
@@ -62,8 +61,16 @@ client.snipes = {}
 async def on_ready():
   global bot_loop
   bot_loop = asyncio.get_running_loop()
+  print(f'[on_ready] Bot is ready!')
+  print(f'[on_ready] Bot user: {client.user} (ID: {client.user.id})')
+  print(f'[on_ready] Bot loop stored: {bot_loop is not None}')
+  print(f'[on_ready] Bot loop: {bot_loop}')
+  print(f'[on_ready] Bot loop closed: {bot_loop.is_closed() if bot_loop else "N/A"}')
+  print(f'[on_ready] Connected to {len(client.guilds)} guild(s)')
+  for guild in client.guilds:
+    print(f'[on_ready]   - {guild.name} (ID: {guild.id})')
   await client.change_presence(activity=discord.Activity(type=discord.ActivityType.watching, name=" the AI & Data Science Club!"))
-  print(f'Ready! Bot loop stored: {bot_loop is not None}')
+  print(f'[on_ready] Presence updated successfully')
 
 async def send_email(subject, message_content):
     """Send email notification using Maileroo API"""
@@ -120,89 +127,138 @@ async def send_email(subject, message_content):
 
 def find_channel_from_subject(subject):
     """Parse email subject to find the Discord channel name and return the channel"""
+    print(f'[find_channel_from_subject] Looking for channel from subject: {subject}')
     # Remove "Re:" or "RE:" prefix if present
     subject_clean = re.sub(r'^(Re|RE):\s*', '', subject, flags=re.IGNORECASE).strip()
+    print(f'[find_channel_from_subject] Cleaned subject: {subject_clean}')
     
     # Look for pattern: [Discord] #channel-name - author-name
     match = re.search(r'\[Discord\]\s*#([^\s-]+)', subject_clean, re.IGNORECASE)
     if match:
         channel_name = match.group(1)
+        print(f'[find_channel_from_subject] Found channel name from pattern: {channel_name}')
         # Find the channel in the guild
         guild = client.get_guild(int(discord_guild_id))
         if guild:
+            print(f'[find_channel_from_subject] Guild found: {guild.name} (ID: {guild.id})')
+            print(f'[find_channel_from_subject] Searching in {len(guild.text_channels)} text channels')
             channel = discord.utils.get(guild.text_channels, name=channel_name)
             if channel:
+                print(f'[find_channel_from_subject] Channel found: {channel.name} (ID: {channel.id})')
                 return channel
             else:
-                print(f"Channel '{channel_name}' not found in guild. Subject: {subject}")
+                print(f'[find_channel_from_subject] Channel \'{channel_name}\' not found in guild')
+                print(f'[find_channel_from_subject] Available channels: {[c.name for c in guild.text_channels]}')
+        else:
+            print(f'[find_channel_from_subject] Guild not found for ID: {discord_guild_id}')
+    else:
+        print(f'[find_channel_from_subject] No channel pattern found in subject')
     
     # Fallback: try to find channel by ID if configured
     if discord_channel_id:
+        print(f'[find_channel_from_subject] Trying fallback channel ID: {discord_channel_id}')
         channel = client.get_channel(int(discord_channel_id))
         if channel:
+            print(f'[find_channel_from_subject] Fallback channel found: {channel.name} (ID: {channel.id})')
             return channel
+        else:
+            print(f'[find_channel_from_subject] Fallback channel ID not found')
     
+    print(f'[find_channel_from_subject] No channel found for subject: {subject}')
     return None
 
 async def get_or_create_sophia_webhook(channel):
     """Get or create a webhook named 'sophia' in the channel"""
+    print(f'[get_or_create_sophia_webhook] Starting for channel: {channel.name} (ID: {channel.id})')
     try:
         # Try to find existing webhook named "sophia"
+        print(f'[get_or_create_sophia_webhook] Fetching webhooks from channel...')
         webhooks = [webhook async for webhook in channel.webhooks]
+        print(f'[get_or_create_sophia_webhook] Found {len(webhooks)} webhook(s) in channel')
+        for webhook in webhooks:
+            print(f'[get_or_create_sophia_webhook]   - Webhook: {webhook.name} (ID: {webhook.id})')
+        
         sophia_webhook = discord.utils.get(webhooks, name="sophia")
         
         if sophia_webhook:
+            print(f'[get_or_create_sophia_webhook] Found existing "sophia" webhook: {sophia_webhook.id}')
             return sophia_webhook
         
+        print(f'[get_or_create_sophia_webhook] "sophia" webhook not found, creating new one...')
         # Webhook doesn't exist, create one with Sophia's name and avatar
         guild = channel.guild
+        print(f'[get_or_create_sophia_webhook] Guild: {guild.name} (ID: {guild.id})')
+        
         sophia_user = guild.get_member(PRIMARY_SOPHIA_ID)
+        print(f'[get_or_create_sophia_webhook] Looking for Sophia user (ID: {PRIMARY_SOPHIA_ID})')
         
         if sophia_user:
             avatar_url = sophia_user.display_avatar.url
+            print(f'[get_or_create_sophia_webhook] Sophia user found: {sophia_user.name}, avatar URL: {avatar_url}')
         else:
             avatar_url = None
+            print(f'[get_or_create_sophia_webhook] Sophia user not found in guild, using no avatar')
         
         # Create the webhook
+        print(f'[get_or_create_sophia_webhook] Creating webhook...')
         webhook = await channel.create_webhook(
             name="sophia",
             avatar=avatar_url,
             reason="Created for email-to-Discord forwarding"
         )
-        
+        print(f'[get_or_create_sophia_webhook] Webhook created successfully: {webhook.id}')
         return webhook
         
     except discord.errors.Forbidden:
-        print(f"Error: Bot doesn't have permission to manage webhooks in channel {channel.name}")
+        print(f'[get_or_create_sophia_webhook] ERROR: Bot doesn\'t have permission to manage webhooks in channel {channel.name}')
+        import traceback
+        traceback.print_exc()
         return None
     except Exception as e:
-        print(f"Error getting/creating webhook: {e}")
+        print(f'[get_or_create_sophia_webhook] ERROR: {e}')
+        import traceback
+        traceback.print_exc()
         return None
 
 async def send_email_to_discord(from_email, subject, body, date=None, attachments=None, 
                                  envelope_sender=None, recipients=None, domain=None, is_spam=False):
     """Send email content to Discord channel based on subject line"""
+    print(f'[send_email_to_discord] Called with subject: {subject}')
+    print(f'[send_email_to_discord] From: {from_email}')
+    print(f'[send_email_to_discord] Body length: {len(body)} chars')
+    print(f'[send_email_to_discord] Date: {date}')
+    print(f'[send_email_to_discord] Attachments: {len(attachments) if attachments else 0}')
+    print(f'[send_email_to_discord] Is spam: {is_spam}')
+    
     if not email_to_discord_configured:
+        print(f'[send_email_to_discord] ERROR: Email-to-Discord not configured')
         return
     
     try:
         # Find channel from subject line
+        print(f'[send_email_to_discord] Looking for channel from subject: {subject}')
         channel = find_channel_from_subject(subject)
         
         if channel is None:
-            print(f"Error: Could not find Discord channel from subject '{subject}'")
+            print(f'[send_email_to_discord] ERROR: Could not find Discord channel from subject \'{subject}\'')
             return
+        
+        print(f'[send_email_to_discord] Found channel: {channel.name} (ID: {channel.id})')
         
         # Build plain text message
         message_parts = [body, "\n\n> sent from my email"]
         full_message = "".join(message_parts)
+        print(f'[send_email_to_discord] Full message length: {len(full_message)} chars')
         
         # Get or create the "sophia" webhook
+        print(f'[send_email_to_discord] Getting/creating webhook for channel {channel.name}')
         webhook = await get_or_create_sophia_webhook(channel)
         
         if webhook:
+            print(f'[send_email_to_discord] Using webhook: {webhook.name} (ID: {webhook.id})')
             # Discord message limit is 2000 characters
             if len(full_message) > 2000:
+                print(f'[send_email_to_discord] Message too long, splitting into chunks...')
                 # Split into chunks
                 chunks = []
                 current_chunk = ""
@@ -215,15 +271,22 @@ async def send_email_to_discord(from_email, subject, body, date=None, attachment
                         current_chunk = line + '\n'
                 if current_chunk:
                     chunks.append(current_chunk.strip())
+                print(f'[send_email_to_discord] Split into {len(chunks)} chunk(s)')
                 
+                print(f'[send_email_to_discord] Sending first chunk ({len(chunks[0])} chars)...')
                 await webhook.send(content=chunks[0])
-                for chunk in chunks[1:]:
+                for i, chunk in enumerate(chunks[1:], 1):
+                    print(f'[send_email_to_discord] Sending chunk {i+1}/{len(chunks)} ({len(chunk)} chars)...')
                     await webhook.send(content=chunk)
             else:
+                print(f'[send_email_to_discord] Sending single message...')
                 await webhook.send(content=full_message)
+            print(f'[send_email_to_discord] Message sent successfully via webhook')
         else:
+            print(f'[send_email_to_discord] WARNING: Could not use webhook, sending as bot instead')
             # Fallback: send as bot if webhook creation fails
             if len(full_message) > 2000:
+                print(f'[send_email_to_discord] Message too long, splitting into chunks (bot fallback)...')
                 chunks = []
                 current_chunk = ""
                 for line in full_message.split('\n'):
@@ -235,13 +298,21 @@ async def send_email_to_discord(from_email, subject, body, date=None, attachment
                         current_chunk = line + '\n'
                 if current_chunk:
                     chunks.append(current_chunk.strip())
+                print(f'[send_email_to_discord] Split into {len(chunks)} chunk(s)')
+                
+                print(f'[send_email_to_discord] Sending first chunk as bot ({len(chunks[0])} chars)...')
                 await channel.send(content=chunks[0])
-                for chunk in chunks[1:]:
+                for i, chunk in enumerate(chunks[1:], 1):
+                    print(f'[send_email_to_discord] Sending chunk {i+1}/{len(chunks)} as bot ({len(chunk)} chars)...')
                     await channel.send(content=chunk)
             else:
+                print(f'[send_email_to_discord] Sending single message as bot...')
                 await channel.send(content=full_message)
+            print(f'[send_email_to_discord] Message sent successfully as bot')
+        
+        print(f'[send_email_to_discord] Email from {from_email} forwarded to Discord channel {channel.name} (ID: {channel.id})')
     except Exception as e:
-        print(f"Error sending email to Discord: {e}")
+        print(f'[send_email_to_discord] ERROR sending email to Discord: {e}')
         import traceback
         traceback.print_exc()
 
@@ -396,14 +467,25 @@ def test():
 @app.route('/email-webhook', methods=['POST'])
 def email_webhook():
     """Webhook endpoint for receiving emails from Maileroo Inbound Routing"""
+    print(f'[email_webhook] Received webhook request')
+    print(f'[email_webhook] Request method: {request.method}')
+    print(f'[email_webhook] Request headers: {dict(request.headers)}')
+    print(f'[email_webhook] Content-Type: {request.content_type}')
+    print(f'[email_webhook] Content-Length: {request.content_length}')
+    
     try:
+        print(f'[email_webhook] Parsing JSON data...')
         data = request.get_json()
         
         if not data:
+            print(f'[email_webhook] ERROR: No data received')
             return {"status": "error", "message": "No data received"}, 400
+        
+        print(f'[email_webhook] Data keys: {list(data.keys())}')
         
         # Parse Maileroo webhook payload
         headers = data.get('headers', {})
+        print(f'[email_webhook] Headers received: {list(headers.keys())}')
         
         def get_header_value(header_name, default='Unknown'):
             header_values = headers.get(header_name, [])
@@ -415,55 +497,81 @@ def email_webhook():
         
         from_header = get_header_value('From', 'Unknown')
         subject_header = get_header_value('Subject', 'No Subject')
+        print(f'[email_webhook] Extracted subject from webhook: \'{subject_header}\'')
+        print(f'[email_webhook] Extracted from: \'{from_header}\'')
         
         # Extract email body
         body_data = data.get('body', {})
+        print(f'[email_webhook] Body data keys: {list(body_data.keys()) if isinstance(body_data, dict) else "Not a dict"}')
         body = body_data.get('stripped_plaintext') or body_data.get('plaintext', '')
+        print(f'[email_webhook] Plaintext body length: {len(body)} chars')
         
         # If no plaintext, try HTML stripped version
         if not body:
+            print(f'[email_webhook] No plaintext found, trying HTML...')
             html_body = body_data.get('stripped_html') or body_data.get('html', '')
             if html_body:
+                print(f'[email_webhook] Found HTML body ({len(html_body)} chars), stripping HTML...')
                 body = re.sub('<[^<]+?>', '', html_body)
+                print(f'[email_webhook] Stripped HTML body length: {len(body)} chars')
         
         # Get date from processed_at timestamp
         processed_at = data.get('processed_at')
         date = processed_at if processed_at else None
+        print(f'[email_webhook] Date: {date}')
         
         # Get attachments
         attachments = data.get('attachments', [])
+        print(f'[email_webhook] Attachments: {len(attachments)}')
         
         # Get additional info
         envelope_sender = data.get('envelope_sender', 'Unknown')
         recipients = data.get('recipients', [])
         domain = data.get('domain', 'Unknown')
         is_spam = data.get('is_spam', False)
+        print(f'[email_webhook] Envelope sender: {envelope_sender}')
+        print(f'[email_webhook] Recipients: {recipients}')
+        print(f'[email_webhook] Domain: {domain}')
+        print(f'[email_webhook] Is spam: {is_spam}')
+        
+        print(f'[email_webhook] Processing email webhook: from={from_header}, subject={subject_header}')
         
         # Forward to Discord asynchronously
         if email_to_discord_configured:
+            print(f'[email_webhook] Email-to-Discord is configured, forwarding...')
             # Wait for bot to be ready
             import time
             max_wait = 15
             waited = 0
+            print(f'[email_webhook] Waiting for bot to be ready (max {max_wait}s)...')
+            print(f'[email_webhook] Initial state: is_ready={client.is_ready()}, bot_loop={bot_loop}, loop_closed={bot_loop.is_closed() if bot_loop else "N/A"}')
+            
             while waited < max_wait:
                 if client.is_ready() and bot_loop and not bot_loop.is_closed():
+                    print(f'[email_webhook] Bot is ready! (waited {waited}s)')
                     break
                 time.sleep(0.5)
                 waited += 0.5
+                if waited % 2 == 0:  # Log every 2 seconds
+                    print(f'[email_webhook] Still waiting... ({waited}s) is_ready={client.is_ready()}, bot_loop={bot_loop is not None}, loop_closed={bot_loop.is_closed() if bot_loop else "N/A"}')
             
             if not client.is_ready() or not bot_loop or bot_loop.is_closed():
-                print(f"DEBUG: is_ready={client.is_ready()}, bot_loop={bot_loop}, closed={bot_loop.is_closed() if bot_loop else 'N/A'}")
+                print(f'[email_webhook] ERROR: Bot not ready after {waited}s')
+                print(f'[email_webhook] DEBUG: is_ready={client.is_ready()}, bot_loop={bot_loop}, closed={bot_loop.is_closed() if bot_loop else "N/A"}')
                 return {"status": "error", "message": "Bot not ready yet"}, 503
             
+            print(f'[email_webhook] Scheduling Discord send coroutine...')
             # Schedule the coroutine using the bot's event loop
             def handle_result(future):
                 try:
-                    future.result()
+                    result = future.result()
+                    print(f'[email_webhook] Discord send completed successfully')
                 except Exception as e:
-                    print(f"Error sending email to Discord: {e}")
+                    print(f'[email_webhook] ERROR in Discord send callback: {e}')
                     import traceback
                     traceback.print_exc()
             
+            print(f'[email_webhook] Creating coroutine with bot_loop: {bot_loop}')
             future = asyncio.run_coroutine_threadsafe(
                 send_email_to_discord(
                     from_email=from_header,
@@ -478,14 +586,17 @@ def email_webhook():
                 ),
                 bot_loop
             )
+            print(f'[email_webhook] Coroutine scheduled, future: {future}')
             future.add_done_callback(handle_result)
             
+            print(f'[email_webhook] Email successfully processed and sent to Discord')
             return {"status": "success", "message": "Email forwarded to Discord"}, 200
         else:
+            print(f'[email_webhook] ERROR: Email-to-Discord not configured')
             return {"status": "error", "message": "Email-to-Discord not configured"}, 400
             
     except Exception as e:
-        print(f"Error processing email webhook: {e}")
+        print(f'[email_webhook] ERROR processing email webhook: {e}')
         import traceback
         traceback.print_exc()
         return {"status": "error", "message": str(e)}, 500
@@ -496,23 +607,32 @@ def not_found(e):
 
 def run_bot():
     """Run Discord bot in background thread"""
+    print(f'[run_bot] Starting Discord bot...')
+    print(f'[run_bot] Thread: {threading.current_thread().name}')
+    print(f'[run_bot] Token present: {bool(token)}')
     try:
         if not token:
-            print("Error: Discord token not found, bot will not start")
+            print("[run_bot] ERROR: Discord token not found, bot will not start")
             return
+        print(f'[run_bot] Calling client.run(token)...')
         client.run(token)
+        print(f'[run_bot] client.run() returned (this shouldn\'t normally happen)')
     except Exception as e:
-        print(f"Error starting Discord bot: {e}")
+        print(f"[run_bot] ERROR starting Discord bot: {e}")
         import traceback
         traceback.print_exc()
 
 def start_bot_thread():
+    print(f'[start_bot_thread] Starting bot thread...')
+    print(f'[start_bot_thread] Token present: {bool(token)}')
     if token:
         bot_thread = threading.Thread(target=run_bot, daemon=True, name="DiscordBot")
+        print(f'[start_bot_thread] Created thread: {bot_thread.name}')
         bot_thread.start()
-        print("Discord bot thread started")
+        print(f'[start_bot_thread] Thread started: {bot_thread.is_alive()}')
+        print(f'[start_bot_thread] Thread ID: {bot_thread.ident}')
     else:
-        print("Warning: No Discord token found, bot will not start")
+        print("[start_bot_thread] WARNING: No Discord token found, bot will not start")
 
 # Start bot thread when module loads (but after Flask routes are registered)
 start_bot_thread()
