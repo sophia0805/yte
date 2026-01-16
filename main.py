@@ -56,12 +56,19 @@ bot_ready = False  # Flag to track if bot is ready
 @client.event
 async def on_ready():
   await client.change_presence(activity=discord.watching(name=" the AI & Data Science Club!"))
-  print('Ready!')
+  print('=' * 50)
+  print('✅ Discord Bot Connected and Ready!')
+  print(f'Logged in as: {client.user.name} (ID: {client.user.id})')
+  print(f'Connected to {len(client.guilds)} guild(s)')
+  print('=' * 50)
+  
   # Store the event loop for use in Flask routes
   global bot_event_loop, bot_ready
   bot_event_loop = asyncio.get_event_loop()
   bot_ready = True
-  print(f"Bot ready! Event loop stored: {bot_event_loop is not None}")
+  print(f"✅ Bot ready flag set to True")
+  print(f"✅ Event loop stored: {bot_event_loop is not None}")
+  print(f"✅ Client.is_ready(): {client.is_ready()}")
 
 async def send_email(subject, message_content):
     """Send email notification using Maileroo API"""
@@ -220,7 +227,7 @@ async def send_email_to_discord(from_email, subject, body, date=None, attachment
         message_parts.append(body)
         
         # Add "sent from my email" note
-        message_parts.append("\n\n*sent from my email")
+        message_parts.append("\n\n> sent from my email")
         
         # Combine into message
         full_message = "".join(message_parts)
@@ -621,25 +628,31 @@ def email_webhook():
         
         # Forward to Discord asynchronously
         if email_to_discord_configured:
-            # Include spam status in the message
-            spam_note = ""
-            if is_spam or spam_status_header == 'Yes':
-                spam_note = " ⚠️ **SPAM**"
             
             # Use the stored bot event loop
             global bot_event_loop, bot_ready
             
-            # Check if bot is ready and loop is available
-            if not bot_ready:
-                print(f"Error: Bot not ready yet. Waiting...")
-                # Wait a bit for bot to be ready (max 10 seconds)
-                import time
-                for _ in range(20):  # Check every 0.5 seconds for 10 seconds
-                    if bot_ready and bot_event_loop:
-                        break
-                    time.sleep(0.5)
+            # Check if bot is actually ready (check both flag and client state)
+            # Use client.is_ready() as the source of truth since bot can send messages
+            if not bot_event_loop:
+                print(f"Error: Bot event loop not available.")
+                return {"status": "error", "message": "Bot event loop not available"}, 503
             
-            if bot_event_loop and bot_ready:
+            # Wait for bot to be ready (check both flag and client state)
+            import time
+            max_wait = 15  # seconds
+            waited = 0
+            while waited < max_wait:
+                # Check both the flag and the client's actual ready state
+                is_actually_ready = bot_ready or (hasattr(client, 'is_ready') and client.is_ready())
+                if is_actually_ready and bot_event_loop:
+                    break
+                time.sleep(0.5)
+                waited += 0.5
+            
+            is_actually_ready = bot_ready or (hasattr(client, 'is_ready') and client.is_ready())
+            
+            if bot_event_loop and is_actually_ready:
                 print(f"Processing email webhook: from={from_header}, subject={subject_header}")
                 
                 def handle_result(future):
@@ -656,7 +669,7 @@ def email_webhook():
                 future = asyncio.run_coroutine_threadsafe(
                     send_email_to_discord(
                         from_email=from_header,
-                        subject=subject_header + spam_note,
+                        subject=subject_header,
                         body=body,
                         date=date,
                         attachments=attachments,
@@ -669,8 +682,33 @@ def email_webhook():
                 )
                 future.add_done_callback(handle_result)
             else:
-                print(f"Error: Bot event loop not available. bot_ready={bot_ready}, bot_event_loop={bot_event_loop is not None}")
-                return {"status": "error", "message": "Bot not ready"}, 503
+                is_actually_ready = bot_ready or (hasattr(client, 'is_ready') and client.is_ready())
+                print(f"Error: Bot not ready. bot_ready={bot_ready}, client.is_ready()={client.is_ready() if hasattr(client, 'is_ready') else 'N/A'}, bot_event_loop={bot_event_loop is not None}")
+                # If bot can send messages, it's probably ready - force it
+                if bot_event_loop:
+                    print("Warning: Bot appears not ready but has event loop. Attempting to send anyway...")
+                    # Try anyway if we have the event loop
+                    try:
+                        future = asyncio.run_coroutine_threadsafe(
+                            send_email_to_discord(
+                                from_email=from_header,
+                                subject=subject_header,
+                                body=body,
+                                date=date,
+                                attachments=attachments,
+                                envelope_sender=envelope_sender,
+                                recipients=recipients,
+                                domain=domain,
+                                is_spam=is_spam
+                            ),
+                            bot_event_loop
+                        )
+                        future.add_done_callback(lambda f: print("Email processing completed") if f.exception() is None else print(f"Error: {f.exception()}"))
+                    except Exception as e:
+                        print(f"Error scheduling email: {e}")
+                        return {"status": "error", "message": f"Error scheduling email: {str(e)}"}, 500
+                else:
+                    return {"status": "error", "message": "Bot not ready"}, 503
             
             # Optionally delete the email after processing (uncomment if desired)
             # deletion_url = data.get('deletion_url')
