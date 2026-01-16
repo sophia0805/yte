@@ -10,7 +10,7 @@ import sys
 from datetime import datetime
 
 # Configuration
-WEBHOOK_URL = "http://localhost:8080/email-webhook"  # Change port if needed
+WEBHOOK_URL = "http://localhost:8081/email-webhook"  # Change port if needed
 
 def test_email(channel_name="general"):
     """Test sending an email reply to a Discord channel"""

@@ -60,7 +60,10 @@ client.snipes = {}
 @client.event
 async def on_ready():
   global bot_loop
-  bot_loop = asyncio.get_running_loop()
+  # Ensure bot_loop is set (it should already be set in run_bot, but just in case)
+  if bot_loop is None:
+    bot_loop = asyncio.get_running_loop()
+    print(f'[on_ready] Bot loop was None, setting it now: {bot_loop}')
   print(f'[on_ready] Bot is ready!')
   print(f'[on_ready] Bot user: {client.user} (ID: {client.user.id})')
   print(f'[on_ready] Bot loop stored: {bot_loop is not None}')
@@ -583,6 +586,16 @@ def email_webhook():
             print(f'[email_webhook] Scheduling coroutine with bot_loop: {bot_loop}')
             print(f'[email_webhook] Bot loop running: {bot_loop.is_running() if bot_loop else "N/A"}')
             print(f'[email_webhook] Bot loop closed: {bot_loop.is_closed() if bot_loop else "N/A"}')
+
+            # DEBUG: Test if the loop handles a simple print immediately
+            def debug_print():
+                print(f'[email_webhook] DEBUG: Loop is processing events! Time: {datetime.now()}')
+            
+            try:
+                bot_loop.call_soon_threadsafe(debug_print)
+                print(f'[email_webhook] DEBUG: Scheduled simple debug print')
+            except Exception as e:
+                print(f'[email_webhook] DEBUG: Failed to schedule debug print: {e}')
             
             # Schedule the coroutine using the bot's event loop
             def handle_result(future):
@@ -636,6 +649,7 @@ def run_bot():
     print(f'[run_bot] Thread: {threading.current_thread().name}')
     print(f'[run_bot] Token present: {bool(token)}')
     
+    loop = None
     try:
         if not token:
             print("[run_bot] ERROR: Discord token not found, bot will not start")
@@ -649,19 +663,40 @@ def run_bot():
         print(f'[run_bot] Event loop created: {loop}')
         print(f'[run_bot] Bot loop stored globally: {bot_loop is not None}')
         
+        # Create an async function to start the bot and handle errors
+        async def start_bot():
+            try:
+                print(f'[run_bot] Inside start_bot() coroutine')
+                print(f'[run_bot] Starting client.start(token)...')
+                await client.start(token)
+                print(f'[run_bot] client.start() completed (unexpected)')
+            except Exception as e:
+                print(f'[run_bot] ERROR in client.start(): {type(e).__name__}: {e}')
+                import traceback
+                traceback.print_exc()
+                # Don't raise - we want the loop to keep running
+
+        async def heartbeat():
+            while True:
+                print(f'[Heartbeat] Bot loop is alive. Time: {datetime.now()}')
+                await asyncio.sleep(5)
+        
         # Schedule client.start() as a task, then run the loop forever
         # This allows run_coroutine_threadsafe to work
         print(f'[run_bot] Creating client.start() task...')
-        loop.create_task(client.start(token))
-        print(f'[run_bot] client.start() task created, running loop forever...')
+        task = loop.create_task(start_bot())
+        loop.create_task(heartbeat())
+        print(f'[run_bot] client.start() task created: {task}')
+        print(f'[run_bot] Task done: {task.done()}, cancelled: {task.cancelled()}')
+        print(f'[run_bot] Running loop forever...')
         loop.run_forever()
         
     except Exception as e:
-        print(f"[run_bot] ERROR starting Discord bot: {e}")
+        print(f"[run_bot] ERROR starting Discord bot: {type(e).__name__}: {e}")
         import traceback
         traceback.print_exc()
     finally:
-        if 'loop' in locals() and not loop.is_closed():
+        if loop and not loop.is_closed():
             print(f'[run_bot] Closing event loop...')
             loop.close()
 
