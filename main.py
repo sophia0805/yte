@@ -192,11 +192,9 @@ async def get_or_create_sophia_webhook(channel):
         guild = channel.guild
         print(f'[get_or_create_sophia_webhook] Guild: {guild.name} (ID: {guild.id})')
 
-        avatar_url = 'https://cdn.discordapp.com/avatars/704038199776903209/58cc604300dfcd8348b09a26f37a1a1e.png'
         print(f'[get_or_create_sophia_webhook] Creating webhook...')
         webhook = await channel.create_webhook(
             name="sophia",
-            avatar=avatar_url,
             reason="Created for email-to-Discord forwarding"
         )
         print(f'[get_or_create_sophia_webhook] Webhook created successfully: {webhook.id}')
@@ -253,7 +251,12 @@ async def send_email_to_discord(from_email, subject, body, date=None, attachment
         if webhook:
             print(f'[send_email_to_discord] Using webhook: {webhook.name} (ID: {webhook.id})')
             print(f'[send_email_to_discord] Sending single message...')
-            await webhook.send(content=full_message)
+            # Override username and avatar for this message
+            await webhook.send(
+                content=full_message,
+                username="sophia",
+                avatar_url="https://cdn.discordapp.com/avatars/704038199776903209/58cc604300dfcd8348b09a26f37a1a1e.png"
+            )
             print(f'[send_email_to_discord] Message sent successfully via webhook')
         else:
             print(f'[send_email_to_discord] WARNING: Could not use webhook, sending as bot instead')
