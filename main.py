@@ -635,8 +635,19 @@ def email_webhook():
             # Check if bot is actually ready (check both flag and client state)
             # Use client.is_ready() as the source of truth since bot can send messages
             if not bot_event_loop:
-                print(f"Error: Bot event loop not available.")
-                return {"status": "error", "message": "Bot event loop not available"}, 503
+                print(f"ERROR: Bot event loop not available.")
+                print(f"DEBUG: bot_event_loop={bot_event_loop}, type={type(bot_event_loop)}")
+                print(f"DEBUG: Thread info: {[t.name for t in threading.enumerate()]}")
+                # Try to wait a bit more in case bot is still starting
+                import time
+                for i in range(10):
+                    time.sleep(0.5)
+                    if bot_event_loop:
+                        print(f"Bot event loop became available after {i*0.5} seconds")
+                        break
+                
+                if not bot_event_loop:
+                    return {"status": "error", "message": "Bot event loop not available. Bot may not have started yet."}, 503
             
             # Wait for bot to be ready (check both flag and client state)
             import time
@@ -710,16 +721,6 @@ def email_webhook():
                 else:
                     return {"status": "error", "message": "Bot not ready"}, 503
             
-            # Optionally delete the email after processing (uncomment if desired)
-            # deletion_url = data.get('deletion_url')
-            # if deletion_url:
-            #     async def delete_email():
-            #         async with aiohttp.ClientSession() as session:
-            #             async with session.delete(deletion_url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
-            #                 if resp.status == 200:
-            #                     print("Email deleted from Maileroo storage")
-            #     asyncio.run_coroutine_threadsafe(delete_email(), client.loop)
-            
             return {"status": "success", "message": "Email forwarded to Discord"}, 200
         else:
             return {"status": "error", "message": "Email-to-Discord not configured"}, 400
@@ -763,12 +764,26 @@ def run_bot():
             pass
 
 def start_bot_thread():
+    global bot_event_loop
     if token:
+        print("Starting Discord bot thread...")
         bot_thread = threading.Thread(target=run_bot, daemon=True, name="DiscordBot")
         bot_thread.start()
         print("Discord bot thread started")
+        print("Waiting for bot to connect... (this may take a few seconds)")
+        
+        # Give the thread a moment to start and store the event loop
+        import time
+        time.sleep(1)
+        
+        # Verify bot is starting
+        if bot_event_loop:
+            print(f"✅ Bot event loop available: {bot_event_loop is not None}")
+        else:
+            print("⚠️ Bot event loop not yet available (bot may still be connecting)")
     else:
-        print("Warning: No Discord token found, bot will not start")
+        print("ERROR: No Discord token found, bot will not start")
+        print("Make sure 'token' is set in your .env file")
 
 start_bot_thread()
 

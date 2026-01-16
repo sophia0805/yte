@@ -7,7 +7,9 @@ bind = "0.0.0.0:{}".format(int(os.environ.get("PORT", 5000)))
 backlog = 2048
 
 # Worker processes
-workers = multiprocessing.cpu_count() * 2 + 1
+# Use 1 worker for bot to avoid multiple bot instances
+# Bots should only have one instance running
+workers = 1
 worker_class = "sync"
 worker_connections = 1000
 timeout = 120  # Increase timeout to 120 seconds (default is 30)
