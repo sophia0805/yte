@@ -51,14 +51,17 @@ PRIMARY_SOPHIA_ID = 704038199776903209  # Primary user ID for webhook avatar
  
 client.snipes = {}
 bot_event_loop = None  # Global variable to store the bot's event loop
+bot_ready = False  # Flag to track if bot is ready
 
 @client.event
 async def on_ready():
   await client.change_presence(activity=discord.watching(name=" the AI & Data Science Club!"))
   print('Ready!')
   # Store the event loop for use in Flask routes
-  global bot_event_loop
+  global bot_event_loop, bot_ready
   bot_event_loop = asyncio.get_event_loop()
+  bot_ready = True
+  print(f"Bot ready! Event loop stored: {bot_event_loop is not None}")
 
 async def send_email(subject, message_content):
     """Send email notification using Maileroo API"""
@@ -193,45 +196,25 @@ async def get_or_create_sophia_webhook(channel):
 async def send_email_to_discord(from_email, subject, body, date=None, attachments=None, 
                                  envelope_sender=None, recipients=None, domain=None, is_spam=False):
     """Send email content to Discord channel based on subject line"""
+    print(f"[send_email_to_discord] Called with subject: {subject}")
+    
     if not email_to_discord_configured:
+        print("[send_email_to_discord] Email-to-Discord not configured, returning")
         return
     
     try:
         # Find channel from subject line
+        print(f"[send_email_to_discord] Looking for channel from subject: {subject}")
         channel = find_channel_from_subject(subject)
         
         if channel is None:
-            print(f"Error: Could not find Discord channel from subject '{subject}' and no fallback channel configured")
+            print(f"[send_email_to_discord] ERROR: Could not find Discord channel from subject '{subject}' and no fallback channel configured")
             return
+        
+        print(f"[send_email_to_discord] Found channel: {channel.name} ({channel.id})")
         
         # Build plain text message
         message_parts = []
-        
-        # Add spam indicator if spam
-        if is_spam:
-            message_parts.append("⚠️ **SPAM**\n")
-        
-        # Add subject
-        message_parts.append(f"**Subject:** {subject}\n")
-        
-        # Add from
-        message_parts.append(f"**From:** {from_email}\n")
-        
-        # Add recipients if available
-        if recipients and len(recipients) > 0:
-            recipient_str = ", ".join(recipients[:3])
-            if len(recipients) > 3:
-                recipient_str += f" (+{len(recipients) - 3} more)"
-            message_parts.append(f"**To:** {recipient_str}\n")
-        
-        # Add attachment info if present
-        if attachments and len(attachments) > 0:
-            attachment_info = ", ".join([att.get('filename', 'Unknown') for att in attachments[:5]])
-            if len(attachments) > 5:
-                attachment_info += f" (+{len(attachments) - 5} more)"
-            message_parts.append(f"**Attachments:** {attachment_info}\n")
-        
-        message_parts.append("---\n")
         
         # Add body
         message_parts.append(body)
@@ -243,9 +226,11 @@ async def send_email_to_discord(from_email, subject, body, date=None, attachment
         full_message = "".join(message_parts)
         
         # Get or create the "sophia" webhook
+        print(f"[send_email_to_discord] Getting/creating webhook for channel {channel.name}")
         webhook = await get_or_create_sophia_webhook(channel)
         
         if webhook:
+            print(f"[send_email_to_discord] Webhook ready: {webhook.name} ({webhook.id})")
             # Send using webhook
             # Discord message limit is 2000 characters
             if len(full_message) > 2000:
@@ -273,10 +258,10 @@ async def send_email_to_discord(from_email, subject, body, date=None, attachment
                     await webhook.send(content=chunk)
             else:
                 await webhook.send(content=full_message)
-            print(f"Email from {from_email} sent via webhook to Discord channel {channel.name} ({channel.id})")
+            print(f"[send_email_to_discord] SUCCESS: Email from {from_email} sent via webhook to Discord channel {channel.name} ({channel.id})")
         else:
             # Fallback: send as bot if webhook creation fails
-            print(f"Warning: Could not use webhook, sending as bot instead")
+            print(f"[send_email_to_discord] WARNING: Could not use webhook, sending as bot instead")
             if len(full_message) > 2000:
                 # Send in chunks
                 chunks = []
@@ -301,9 +286,10 @@ async def send_email_to_discord(from_email, subject, body, date=None, attachment
                 await channel.send(content=full_message)
             print(f"Email from {from_email} forwarded to Discord channel {channel.name} ({channel.id})")
     except Exception as e:
-        print(f"Error sending email to Discord: {e}")
+        print(f"[send_email_to_discord] ERROR: Exception occurred: {e}")
         import traceback
         traceback.print_exc()
+        raise  # Re-raise to be caught by the future callback
 
 @client.event
 async def on_message(message):
@@ -603,6 +589,9 @@ def email_webhook():
         from_header = get_header_value('From', 'Unknown')
         subject_header = get_header_value('Subject', 'No Subject')
         
+        print(f"[email_webhook] Extracted subject from webhook: '{subject_header}'")
+        print(f"[email_webhook] Extracted from: '{from_header}'")
+        
         # Check spam status
         is_spam = data.get('is_spam', False)
         spam_status_header = get_header_value('X-Spam-Status', '')
@@ -638,9 +627,33 @@ def email_webhook():
                 spam_note = " ⚠️ **SPAM**"
             
             # Use the stored bot event loop
-            global bot_event_loop
-            if bot_event_loop:
-                asyncio.run_coroutine_threadsafe(
+            global bot_event_loop, bot_ready
+            
+            # Check if bot is ready and loop is available
+            if not bot_ready:
+                print(f"Error: Bot not ready yet. Waiting...")
+                # Wait a bit for bot to be ready (max 10 seconds)
+                import time
+                for _ in range(20):  # Check every 0.5 seconds for 10 seconds
+                    if bot_ready and bot_event_loop:
+                        break
+                    time.sleep(0.5)
+            
+            if bot_event_loop and bot_ready:
+                print(f"Processing email webhook: from={from_header}, subject={subject_header}")
+                
+                def handle_result(future):
+                    """Handle the result of the coroutine"""
+                    try:
+                        result = future.result()
+                        print(f"Email successfully processed and sent to Discord")
+                    except Exception as e:
+                        print(f"Error sending email to Discord: {e}")
+                        import traceback
+                        traceback.print_exc()
+                
+                # Schedule the coroutine and attach error handler
+                future = asyncio.run_coroutine_threadsafe(
                     send_email_to_discord(
                         from_email=from_header,
                         subject=subject_header + spam_note,
@@ -654,8 +667,9 @@ def email_webhook():
                     ),
                     bot_event_loop
                 )
+                future.add_done_callback(handle_result)
             else:
-                print("Error: Bot event loop not available. Bot may not be fully started yet.")
+                print(f"Error: Bot event loop not available. bot_ready={bot_ready}, bot_event_loop={bot_event_loop is not None}")
                 return {"status": "error", "message": "Bot not ready"}, 503
             
             # Optionally delete the email after processing (uncomment if desired)
@@ -692,6 +706,7 @@ def run_bot():
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         bot_event_loop = loop  # Store the loop globally
+        print(f"Bot thread: Event loop stored: {bot_event_loop is not None}")
         
         async def bot_main():
             async with client:
