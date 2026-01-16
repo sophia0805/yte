@@ -44,6 +44,10 @@ client = commands.Bot(command_prefix="soph ", intents=intents, case_insensitive=
 
 async def isSophia(ctx):
   return ctx.author.id == 704038199776903209 or ctx.author.id == 701792352301350973
+
+# Sophia's user IDs (primary and secondary)
+SOPHIA_USER_IDS = [704038199776903209, 701792352301350973]
+PRIMARY_SOPHIA_ID = 704038199776903209  # Primary user ID for webhook avatar
  
 client.snipes = {}
 bot_event_loop = None  # Global variable to store the bot's event loop
@@ -140,6 +144,52 @@ def find_channel_from_subject(subject):
     
     return None
 
+async def get_or_create_sophia_webhook(channel):
+    """Get or create a webhook named 'sophia' in the channel"""
+    try:
+        # Try to find existing webhook named "sophia"
+        # Get webhooks from the channel (returns async iterator)
+        webhooks = [webhook async for webhook in channel.webhooks()]
+        sophia_webhook = discord.utils.get(webhooks, name="sophia")
+        
+        if sophia_webhook:
+            print(f"Found existing webhook 'sophia' in channel {channel.name}")
+            return sophia_webhook
+        
+        # Webhook doesn't exist, create one with Sophia's name and avatar
+        print(f"Creating new webhook 'sophia' in channel {channel.name}")
+        
+        # Get Sophia's user info for avatar
+        guild = channel.guild
+        sophia_user = guild.get_member(PRIMARY_SOPHIA_ID)
+        
+        if sophia_user:
+            username = sophia_user.display_name or sophia_user.name
+            avatar_url = sophia_user.display_avatar.url
+        else:
+            # Fallback if user not found in guild
+            username = "Sophia"
+            avatar_url = None
+        
+        # Create the webhook
+        webhook = await channel.create_webhook(
+            name="sophia",
+            avatar=avatar_url,
+            reason="Created for email-to-Discord forwarding"
+        )
+        
+        print(f"Created webhook 'sophia' with avatar: {avatar_url if avatar_url else 'default'}")
+        return webhook
+        
+    except discord.errors.Forbidden:
+        print(f"Error: Bot doesn't have permission to manage webhooks in channel {channel.name}")
+        return None
+    except Exception as e:
+        print(f"Error getting/creating webhook: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+
 async def send_email_to_discord(from_email, subject, body, date=None, attachments=None, 
                                  envelope_sender=None, recipients=None, domain=None, is_spam=False):
     """Send email content to Discord channel based on subject line"""
@@ -154,56 +204,102 @@ async def send_email_to_discord(from_email, subject, body, date=None, attachment
             print(f"Error: Could not find Discord channel from subject '{subject}' and no fallback channel configured")
             return
         
-        # Determine embed color based on spam status
-        embed_color = discord.Color.orange() if is_spam else discord.Color.blue()
+        # Build plain text message
+        message_parts = []
         
-        # Create embed for the email
-        embed = discord.Embed(
-            title=f"📧 Email from {from_email}",
-            description=body[:2000] if len(body) > 2000 else body,  # Discord embed limit
-            color=embed_color,
-            timestamp=datetime.fromtimestamp(date) if date else datetime.now()
-        )
-        embed.add_field(name="Subject", value=subject[:1024], inline=False)
-        embed.add_field(name="From", value=from_email, inline=True)
+        # Add spam indicator if spam
+        if is_spam:
+            message_parts.append("⚠️ **SPAM**\n")
         
-        # Add recipient info if available
+        # Add subject
+        message_parts.append(f"**Subject:** {subject}\n")
+        
+        # Add from
+        message_parts.append(f"**From:** {from_email}\n")
+        
+        # Add recipients if available
         if recipients and len(recipients) > 0:
             recipient_str = ", ".join(recipients[:3])
             if len(recipients) > 3:
                 recipient_str += f" (+{len(recipients) - 3} more)"
-            embed.add_field(name="To", value=recipient_str[:1024], inline=True)
-        
-        # Add domain info
-        if domain:
-            embed.add_field(name="Domain", value=domain, inline=True)
-        
-        # Add spam indicator
-        if is_spam:
-            embed.add_field(name="⚠️ Spam Status", value="This email was flagged as spam", inline=False)
+            message_parts.append(f"**To:** {recipient_str}\n")
         
         # Add attachment info if present
         if attachments and len(attachments) > 0:
-            attachment_info = "\n".join([
-                f"• {att.get('filename', 'Unknown')} ({att.get('size', 0)} bytes)" 
-                for att in attachments[:5]
-            ])
+            attachment_info = ", ".join([att.get('filename', 'Unknown') for att in attachments[:5]])
             if len(attachments) > 5:
-                attachment_info += f"\n... and {len(attachments) - 5} more"
-            embed.add_field(name="Attachments", value=attachment_info[:1024], inline=False)
+                attachment_info += f" (+{len(attachments) - 5} more)"
+            message_parts.append(f"**Attachments:** {attachment_info}\n")
         
-        # If body is too long, send it as a separate message
-        if len(body) > 2000:
-            await channel.send(embed=embed)
-            # Send remaining content as a code block
-            remaining = body[2000:]
-            chunks = [remaining[i:i+1900] for i in range(0, len(remaining), 1900)]
-            for chunk in chunks:
-                await channel.send(f"```\n{chunk}\n```")
+        message_parts.append("---\n")
+        
+        # Add body
+        message_parts.append(body)
+        
+        # Add "sent from my email" note
+        message_parts.append("\n\n*sent from my email")
+        
+        # Combine into message
+        full_message = "".join(message_parts)
+        
+        # Get or create the "sophia" webhook
+        webhook = await get_or_create_sophia_webhook(channel)
+        
+        if webhook:
+            # Send using webhook
+            # Discord message limit is 2000 characters
+            if len(full_message) > 2000:
+                # Send in chunks
+                chunks = []
+                current_chunk = ""
+                
+                # Split by lines to avoid breaking mid-word
+                lines = full_message.split('\n')
+                for line in lines:
+                    if len(current_chunk) + len(line) + 1 <= 1900:
+                        current_chunk += line + '\n'
+                    else:
+                        if current_chunk:
+                            chunks.append(current_chunk.strip())
+                        current_chunk = line + '\n'
+                
+                if current_chunk:
+                    chunks.append(current_chunk.strip())
+                
+                # Send first chunk
+                await webhook.send(content=chunks[0])
+                # Send remaining chunks
+                for chunk in chunks[1:]:
+                    await webhook.send(content=chunk)
+            else:
+                await webhook.send(content=full_message)
+            print(f"Email from {from_email} sent via webhook to Discord channel {channel.name} ({channel.id})")
         else:
-            await channel.send(embed=embed)
-        
-        print(f"Email from {from_email} forwarded to Discord channel {channel.name} ({channel.id})")
+            # Fallback: send as bot if webhook creation fails
+            print(f"Warning: Could not use webhook, sending as bot instead")
+            if len(full_message) > 2000:
+                # Send in chunks
+                chunks = []
+                current_chunk = ""
+                
+                lines = full_message.split('\n')
+                for line in lines:
+                    if len(current_chunk) + len(line) + 1 <= 1900:
+                        current_chunk += line + '\n'
+                    else:
+                        if current_chunk:
+                            chunks.append(current_chunk.strip())
+                        current_chunk = line + '\n'
+                
+                if current_chunk:
+                    chunks.append(current_chunk.strip())
+                
+                await channel.send(content=chunks[0])
+                for chunk in chunks[1:]:
+                    await channel.send(content=chunk)
+            else:
+                await channel.send(content=full_message)
+            print(f"Email from {from_email} forwarded to Discord channel {channel.name} ({channel.id})")
     except Exception as e:
         print(f"Error sending email to Discord: {e}")
         import traceback
