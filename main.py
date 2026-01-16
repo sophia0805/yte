@@ -223,12 +223,15 @@ async def get_or_create_sophia_webhook(channel):
 async def send_email_to_discord(from_email, subject, body, date=None, attachments=None, 
                                  envelope_sender=None, recipients=None, domain=None, is_spam=False):
     """Send email content to Discord channel based on subject line"""
+    print(f'[send_email_to_discord] ===== FUNCTION CALLED =====')
     print(f'[send_email_to_discord] Called with subject: {subject}')
     print(f'[send_email_to_discord] From: {from_email}')
-    print(f'[send_email_to_discord] Body length: {len(body)} chars')
+    print(f'[send_email_to_discord] Body length: {len(body) if body else 0} chars')
     print(f'[send_email_to_discord] Date: {date}')
     print(f'[send_email_to_discord] Attachments: {len(attachments) if attachments else 0}')
     print(f'[send_email_to_discord] Is spam: {is_spam}')
+    print(f'[send_email_to_discord] Email-to-Discord configured: {email_to_discord_configured}')
+    print(f'[send_email_to_discord] Client ready: {client.is_ready()}')
     
     if not email_to_discord_configured:
         print(f'[send_email_to_discord] ERROR: Email-to-Discord not configured')
@@ -312,9 +315,10 @@ async def send_email_to_discord(from_email, subject, body, date=None, attachment
         
         print(f'[send_email_to_discord] Email from {from_email} forwarded to Discord channel {channel.name} (ID: {channel.id})')
     except Exception as e:
-        print(f'[send_email_to_discord] ERROR sending email to Discord: {e}')
+        print(f'[send_email_to_discord] ERROR sending email to Discord: {type(e).__name__}: {e}')
         import traceback
         traceback.print_exc()
+        raise  # Re-raise so the future callback can catch it
 
 @client.event
 async def on_message(message):
@@ -561,35 +565,55 @@ def email_webhook():
                 return {"status": "error", "message": "Bot not ready yet"}, 503
             
             print(f'[email_webhook] Scheduling Discord send coroutine...')
+            print(f'[email_webhook] Creating coroutine function...')
+            
+            # Create the coroutine first to ensure it's valid
+            coro = send_email_to_discord(
+                from_email=from_header,
+                subject=subject_header,
+                body=body,
+                date=date,
+                attachments=attachments,
+                envelope_sender=envelope_sender,
+                recipients=recipients,
+                domain=domain,
+                is_spam=is_spam
+            )
+            print(f'[email_webhook] Coroutine created: {coro}')
+            print(f'[email_webhook] Scheduling coroutine with bot_loop: {bot_loop}')
+            print(f'[email_webhook] Bot loop running: {bot_loop.is_running() if bot_loop else "N/A"}')
+            print(f'[email_webhook] Bot loop closed: {bot_loop.is_closed() if bot_loop else "N/A"}')
+            
             # Schedule the coroutine using the bot's event loop
             def handle_result(future):
+                print(f'[email_webhook] handle_result callback called')
+                print(f'[email_webhook] Future done: {future.done()}')
+                print(f'[email_webhook] Future cancelled: {future.cancelled()}')
                 try:
+                    if future.exception():
+                        print(f'[email_webhook] Future has exception: {future.exception()}')
+                        raise future.exception()
                     result = future.result()
-                    print(f'[email_webhook] Discord send completed successfully')
+                    print(f'[email_webhook] Discord send completed successfully, result: {result}')
                 except Exception as e:
-                    print(f'[email_webhook] ERROR in Discord send callback: {e}')
+                    print(f'[email_webhook] ERROR in Discord send callback: {type(e).__name__}: {e}')
                     import traceback
                     traceback.print_exc()
             
-            print(f'[email_webhook] Creating coroutine with bot_loop: {bot_loop}')
-            future = asyncio.run_coroutine_threadsafe(
-                send_email_to_discord(
-                    from_email=from_header,
-                    subject=subject_header,
-                    body=body,
-                    date=date,
-                    attachments=attachments,
-                    envelope_sender=envelope_sender,
-                    recipients=recipients,
-                    domain=domain,
-                    is_spam=is_spam
-                ),
-                bot_loop
-            )
-            print(f'[email_webhook] Coroutine scheduled, future: {future}')
-            future.add_done_callback(handle_result)
+            try:
+                future = asyncio.run_coroutine_threadsafe(coro, bot_loop)
+                print(f'[email_webhook] Coroutine scheduled, future: {future}')
+                print(f'[email_webhook] Future done: {future.done()}')
+                print(f'[email_webhook] Future cancelled: {future.cancelled()}')
+                future.add_done_callback(handle_result)
+                print(f'[email_webhook] Done callback added to future')
+            except Exception as e:
+                print(f'[email_webhook] ERROR scheduling coroutine: {type(e).__name__}: {e}')
+                import traceback
+                traceback.print_exc()
+                return {"status": "error", "message": f"Failed to schedule coroutine: {e}"}, 500
             
-            print(f'[email_webhook] Email successfully processed and sent to Discord')
+            print(f'[email_webhook] Email processing queued, returning success response')
             return {"status": "success", "message": "Email forwarded to Discord"}, 200
         else:
             print(f'[email_webhook] ERROR: Email-to-Discord not configured')
