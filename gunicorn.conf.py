@@ -34,3 +34,15 @@ tmp_upload_dir = None
 # SSL (if needed)
 keyfile = None
 certfile = None
+
+def post_worker_init(worker):
+    """
+    Called just after a worker has been processed.
+    Start the Discord bot thread here to ensure it runs in the worker process.
+    """
+    worker.log.info(f"Worker initialized (PID: {os.getpid()}). Starting Discord bot...")
+    try:
+        from main import start_bot_thread
+        start_bot_thread()
+    except Exception as e:
+        worker.log.error(f"Failed to start Discord bot in worker: {e}")

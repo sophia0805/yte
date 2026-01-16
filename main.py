@@ -479,6 +479,8 @@ def email_webhook():
     print(f'[email_webhook] Request headers: {dict(request.headers)}')
     print(f'[email_webhook] Content-Type: {request.content_type}')
     print(f'[email_webhook] Content-Length: {request.content_length}')
+    print(f'[email_webhook] Process ID: {os.getpid()}')
+    print(f'[email_webhook] Thread ID: {threading.get_ident()}')
     
     try:
         print(f'[email_webhook] Parsing JSON data...')
@@ -702,6 +704,8 @@ def run_bot():
 
 def start_bot_thread():
     print(f'[start_bot_thread] Starting bot thread...')
+    print(f'[start_bot_thread] Process ID: {os.getpid()}')
+    print(f'[start_bot_thread] Thread ID: {threading.get_ident()}')
     print(f'[start_bot_thread] Token present: {bool(token)}')
     if token:
         bot_thread = threading.Thread(target=run_bot, daemon=True, name="DiscordBot")
@@ -713,11 +717,14 @@ def start_bot_thread():
         print("[start_bot_thread] WARNING: No Discord token found, bot will not start")
 
 # Start bot thread when module loads (but after Flask routes are registered)
-start_bot_thread()
+# MOVED: Now called by Gunicorn hook or __main__
+# start_bot_thread()
 
 # For local development
 # Note: Deta automatically runs the app, so this is only for local testing
 if __name__ == "__main__":
     port = int(os.getenv('PORT', 8080))  # Deta uses 8080 by default
     print(f"Starting Flask server on port {port}...")
+    # Start bot for local dev since Gunicorn hook won't run
+    start_bot_thread()
     app.run(host='0.0.0.0', port=port, debug=False)
